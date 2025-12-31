@@ -14,36 +14,55 @@ const cacheBank = new NodeCache({ stdTTL: 3600 });
 // Key Vàng của bạn (Đã điền sẵn)
 const GOLD_API_KEY = "goldapi-12ys7019mjtu2byb-io"; 
 
-app.get('/', (req, res) => res.send("Server Tài Chính ThachDing - Online"));
-
-// --- 1. GIÁ VÀNG (Tiết kiệm Key - 8 tiếng cập nhật 1 lần) ---
 app.get('/gold', async (req, res) => {
     const cachedData = cacheGold.get("gold_vn");
-    if (cachedData) return res.send(cachedData);
+    if (cachedData) {
+        console.log("✅ Vàng: Dùng Cache");
+        return res.send(cachedData);
+    }
 
     try {
         console.log("⚠️ Đang gọi GoldAPI...");
+        
+        // [FIX QUAN TRỌNG] Thêm User-Agent để không bị chặn
         const response = await axios.get('https://www.goldapi.io/api/XAU/VND', {
-            headers: { 'x-access-token': GOLD_API_KEY }
+            headers: { 
+                'x-access-token': GOLD_API_KEY,
+                'Content-Type': 'application/json',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            },
+            timeout: 10000 // Tự ngắt sau 10s nếu treo
         });
+
+        console.log("✅ Gọi GoldAPI thành công!"); // Log để biết đã qua ải
 
         const priceVND_Oz = response.data.price;
         const priceVND_Luong = (priceVND_Oz / 0.82945).toFixed(0);
         const priceString = parseInt(priceVND_Luong).toLocaleString('vi-VN');
 
         const now = new Date();
-        // Giờ VN = UTC+7
         const hour = (now.getUTCHours() + 7) % 24;
         const min = now.getUTCMinutes();
-        const timeString = `${hour} giờ ${min} phút`;
+        // Thêm số 0 đằng trước phút nếu < 10 (Ví dụ: 9:05 thay vì 9:5)
+        const minString = min < 10 ? `0${min}` : min;
+        const timeString = `${hour} giờ ${minString} phút`;
         
         const msg = `Vàng thế giới quy đổi lúc ${timeString} là khoảng ${priceString} đồng một lượng.`;
         
         cacheGold.set("gold_vn", msg);
         res.send(msg);
+
     } catch (e) {
-        console.error(e.message);
-        res.send("Hết lượt gọi Vàng hoặc lỗi mạng rồi!");
+        // In chi tiết lỗi ra Log Render để bắt bệnh
+        console.error("❌ LỖI VÀNG:", e.message);
+        if (e.response) {
+            console.error("Data lỗi:", JSON.stringify(e.response.data));
+            // Nếu lỗi 403/401 -> Sai Key hoặc hết lượt
+            // Nếu lỗi 429 -> Gọi quá nhiều
+        }
+        
+        // Trả về câu thông báo để ESP32 đọc, thay vì im lặng
+        res.send("Hiện tại không lấy được giá vàng, bạn thử lại sau nha.");
     }
 });
 
