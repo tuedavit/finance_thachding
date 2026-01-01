@@ -6,63 +6,59 @@ const NodeCache = require('node-cache');
 const app = express();
 app.use(cors());
 
-// Cấu hình Cache: Vàng 8 tiếng, Coin 1 phút, Tỷ giá 1 tiếng
-const cacheGold = new NodeCache({ stdTTL: 28800 }); 
-const cacheCoin = new NodeCache({ stdTTL: 60 });
-const cacheBank = new NodeCache({ stdTTL: 3600 });
 
-// Key Vàng của bạn (Đã điền sẵn)
-const GOLD_API_KEY = "goldapi-12ys7019mjtu2byb-io"; 
+// --- 1. GIÁ VÀNG (PHIÊN BẢN BINANCE - FREE VĨNH VIỄN) ---
+// Không cần GoldAPI Key nữa, vứt luôn cũng được!
 
 app.get('/gold', async (req, res) => {
-    const cachedData = cacheGold.get("gold_vn");
-    if (cachedData) {
-        console.log("✅ Vàng: Dùng Cache");
-        return res.send(cachedData);
-    }
+    // Check cache 10 giây thôi, vì hàng Free mà!
+    const cachedData = cacheGold.get("gold_binance");
+    if (cachedData) return res.send(cachedData);
 
     try {
-        console.log("⚠️ Đang gọi GoldAPI...");
+        console.log("🚀 Đang lấy giá vàng từ Binance (PAXG)...");
+
+        // 1. Gọi 2 API cùng lúc: Giá Vàng (PAXG) và Giá Đô (USDT)
+        // Lưu ý: Binance P2P không có API public dễ lấy, ta dùng mẹo lấy BTC/VND chia BTC/USDT để ra tỷ giá Đô chuẩn
+        const [paxgRes, btcUsdtRes, btcVndRes] = await Promise.all([
+            axios.get('https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT'),
+            axios.get('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT'),
+            axios.get('https://api.binance.com/api/v3/ticker/price?symbol=BTCVND') // Cặp này Binance có list
+        ]);
+
+        // 2. Tính toán
+        const pricePaxg = parseFloat(paxgRes.data.price); // Ví dụ: 2650$
+        const priceBtcUsdt = parseFloat(btcUsdtRes.data.price);
+        const priceBtcVnd = parseFloat(btcVndRes.data.price);
         
-        // [FIX QUAN TRỌNG] Thêm User-Agent để không bị chặn
-        const response = await axios.get('https://www.goldapi.io/api/XAU/VND', {
-            headers: { 
-                'x-access-token': GOLD_API_KEY,
-                'Content-Type': 'application/json',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            },
-            timeout: 10000 // Tự ngắt sau 10s nếu treo
-        });
+        // Tỷ giá USDT thật (theo thị trường crypto VN)
+        const usdtRate = priceBtcVnd / priceBtcUsdt; 
 
-        console.log("✅ Gọi GoldAPI thành công!"); // Log để biết đã qua ải
-
-        const priceVND_Oz = response.data.price;
-        const priceVND_Luong = (priceVND_Oz / 0.82945).toFixed(0);
+        // Công thức quy đổi Ounce sang Lượng (1 Oz = 0.82945 Lượng)
+        // Giá 1 Lượng = (Giá 1 Oz * Tỷ giá Đô) / 0.82945
+        const priceVND_Luong = (pricePaxg * usdtRate) / 0.82945;
+        
+        // Làm tròn
+        const finalPrice = (priceVND_Luong / 1000000).toFixed(2); // Ra số kiểu "82.50" (Triệu)
         const priceString = parseInt(priceVND_Luong).toLocaleString('vi-VN');
 
+        // 3. Tạo câu trả lời (Kèm mớm lời cho AI)
         const now = new Date();
-        const hour = (now.getUTCHours() + 7) % 24;
-        const min = now.getUTCMinutes();
-        // Thêm số 0 đằng trước phút nếu < 10 (Ví dụ: 9:05 thay vì 9:5)
-        const minString = min < 10 ? `0${min}` : min;
-        const timeString = `${hour} giờ ${minString} phút`;
+        const timeString = `${(now.getUTCHours() + 7) % 24}:${now.getUTCMinutes()}`;
         
-        const msg = `Vàng thế giới quy đổi lúc ${timeString} là khoảng ${priceString} đồng một lượng.`;
+        const msg = `Giá vàng thế giới (theo cặp PAXG Binance) đang là ${pricePaxg.toFixed(1)} Đô một Ounce. ` +
+                    `Quy đổi ra tiền Việt khoảng ${priceString} đồng một lượng. ` +
+                    `(YÊU CẦU AI: Chém gió về giá vàng ${finalPrice} triệu này. ` +
+                    `Nếu trên 80 triệu thì kêu 'Đu đỉnh mát lắm', nếu dưới 70 triệu thì kêu 'Bắt đáy đi'. ` +
+                    `Nhắc user đây là giá tham khảo từ sàn Binance).`;
         
-        cacheGold.set("gold_vn", msg);
+        // Cache 60 giây
+        cacheGold.set("gold_binance", msg, 60);
         res.send(msg);
 
     } catch (e) {
-        // In chi tiết lỗi ra Log Render để bắt bệnh
-        console.error("❌ LỖI VÀNG:", e.message);
-        if (e.response) {
-            console.error("Data lỗi:", JSON.stringify(e.response.data));
-            // Nếu lỗi 403/401 -> Sai Key hoặc hết lượt
-            // Nếu lỗi 429 -> Gọi quá nhiều
-        }
-        
-        // Trả về câu thông báo để ESP32 đọc, thay vì im lặng
-        res.send("Hiện tại không lấy được giá vàng, bạn thử lại sau nha.");
+        console.error("Lỗi Binance:", e.message);
+        res.send("Sàn Binance đang bảo trì hay sao ấy, không lấy được giá vàng rồi!");
     }
 });
 
