@@ -6,67 +6,62 @@ const NodeCache = require('node-cache');
 const app = express();
 app.use(cors());
 
-// --- KHAI BÁO CACHE (LÚC NÃY BẠN THIẾU ĐOẠN NÀY NÈ) ---
-const cacheGold = new NodeCache({ stdTTL: 60 });   // Cache Vàng 60s
-const cacheCoin = new NodeCache({ stdTTL: 60 });   // Cache Coin 60s
-const cacheBank = new NodeCache({ stdTTL: 3600 }); // Cache Tỷ giá 1 tiếng
+// Khai báo Cache
+const cacheGold = new NodeCache({ stdTTL: 60 });   // 60s
+const cacheCoin = new NodeCache({ stdTTL: 60 });   // 60s
+const cacheBank = new NodeCache({ stdTTL: 3600 }); // 1 tiếng
 
-app.get('/', (req, res) => res.send("Server Tài Chính (Binance Free) - Online"));
+app.get('/', (req, res) => res.send("Server Tài Chính (Fixed V3) - Online"));
 
-// --- 1. GIÁ VÀNG (PHIÊN BẢN BINANCE - FREE VĨNH VIỄN) ---
+// ============================================================
+// 1. GIÁ VÀNG (Dùng PAXG Binance + Tỷ giá USD Ngân hàng)
+// ============================================================
 app.get('/gold', async (req, res) => {
-    // Check cache 10 giây thôi, vì hàng Free mà!
     const cachedData = cacheGold.get("gold_binance");
     if (cachedData) return res.send(cachedData);
 
     try {
-        console.log("🚀 Đang lấy giá vàng từ Binance (PAXG)...");
+        console.log("🚀 Đang tính giá vàng...");
 
-        // 1. Gọi 2 API cùng lúc: Giá Vàng (PAXG) và Giá Đô (USDT)
-        // Lưu ý: Binance P2P không có API public dễ lấy, ta dùng mẹo lấy BTC/VND chia BTC/USDT để ra tỷ giá Đô chuẩn
-        const [paxgRes, btcUsdtRes, btcVndRes] = await Promise.all([
-            axios.get('https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT'),
-            axios.get('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT'),
-            axios.get('https://api.binance.com/api/v3/ticker/price?symbol=BTCVND') // Cặp này Binance có list
-        ]);
+        // Bước 1: Lấy giá PAXG (Vàng Crypto) từ Binance
+        const paxgRes = await axios.get('https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT');
+        const pricePaxg = parseFloat(paxgRes.data.price); // Ví dụ: 2650 USD
 
-        // 2. Tính toán
-        const pricePaxg = parseFloat(paxgRes.data.price); // Ví dụ: 2650$
-        const priceBtcUsdt = parseFloat(btcUsdtRes.data.price);
-        const priceBtcVnd = parseFloat(btcVndRes.data.price);
+        // Bước 2: Lấy tỷ giá USD/VND từ nguồn mở (Open Exchange Rates)
+        const rateRes = await axios.get('https://open.er-api.com/v6/latest/USD');
+        const usdToVnd = rateRes.data.rates.VND; // Ví dụ: 25400
+
+        // Bước 3: Tính toán (Giả lập giá USDT chợ đen = Giá bank + 4%)
+        // Vì giá vàng Việt Nam thường cao hơn thế giới và USDT cao hơn USD bank
+        const usdtRate = usdToVnd * 1.04; 
         
-        // Tỷ giá USDT thật (theo thị trường crypto VN)
-        const usdtRate = priceBtcVnd / priceBtcUsdt; 
-
-        // Công thức quy đổi Ounce sang Lượng (1 Oz = 0.82945 Lượng)
-        // Giá 1 Lượng = (Giá 1 Oz * Tỷ giá Đô) / 0.82945
+        // Công thức: (Giá PAXG * Giá Đô) / 0.82945 (Quy đổi Ounce -> Lượng)
         const priceVND_Luong = (pricePaxg * usdtRate) / 0.82945;
         
-        // Làm tròn
-        const finalPrice = (priceVND_Luong / 1000000).toFixed(2); // Ra số kiểu "82.50" (Triệu)
+        // Làm tròn số đẹp (Ví dụ: 85,200,000)
+        const finalPriceMillions = (priceVND_Luong / 1000000).toFixed(1); // 85.2
         const priceString = parseInt(priceVND_Luong).toLocaleString('vi-VN');
 
-        // 3. Tạo câu trả lời (Kèm mớm lời cho AI)
-        const now = new Date();
-        const timeString = `${(now.getUTCHours() + 7) % 24}:${now.getUTCMinutes()}`;
+        // Tạo câu trả lời
+        const msg = `Giá vàng thế giới (tham chiếu Binance PAXG) đang khoảng ${pricePaxg.toFixed(0)} Đô/Ounce. ` +
+                    `Quy đổi ra tiền Việt là ${priceString} đồng/lượng. ` +
+                    `(YÊU CẦU AI: Chém gió về mức giá ${finalPriceMillions} triệu này. ` +
+                    `Nếu trên 82 triệu: Hô hào 'Đu đỉnh mát lắm', 'Sắp sập rồi'. ` +
+                    `Nếu dưới 75 triệu: Hô 'Múc mạnh đi', 'All-in thôi'. ` +
+                    `Nhớ nhắc đây là giá tham khảo).`;
         
-        const msg = `Giá vàng thế giới (theo cặp PAXG Binance) đang là ${pricePaxg.toFixed(1)} Đô một Ounce. ` +
-                    `Quy đổi ra tiền Việt khoảng ${priceString} đồng một lượng. ` +
-                    `(YÊU CẦU AI: Chém gió về giá vàng ${finalPrice} triệu này. ` +
-                    `Nếu trên 80 triệu thì kêu 'Đu đỉnh mát lắm', nếu dưới 70 triệu thì kêu 'Bắt đáy đi'. ` +
-                    `Nhắc user đây là giá tham khảo từ sàn Binance).`;
-        
-        // Cache 60 giây
         cacheGold.set("gold_binance", msg, 60);
         res.send(msg);
 
     } catch (e) {
-        console.error("Lỗi Binance:", e.message);
-        res.send("Sàn Binance đang bảo trì hay sao ấy, không lấy được giá vàng rồi!");
+        console.error("Lỗi Gold:", e.message);
+        res.send("Đang không lấy được giá vàng, chắc cá mập cắn cáp rồi!");
     }
 });
 
-// --- 2. GIÁ COIN (Binance Free) ---
+// ============================================================
+// 2. GIÁ COIN (Binance Free)
+// ============================================================
 app.get('/coin', async (req, res) => {
     const symbol = (req.query.symbol || "BTC").toUpperCase();
     const pair = symbol.endsWith("USDT") ? symbol : `${symbol}USDT`;
@@ -77,53 +72,68 @@ app.get('/coin', async (req, res) => {
 
     try {
         const response = await axios.get(`https://api.binance.com/api/v3/ticker/price?symbol=${pair}`);
-        const price = parseFloat(response.data.price).toLocaleString('en-US');
-        const msg = `Giá ${symbol} đang là ${price} Đô la.`;
+        // Format số tiền: 98000.50 -> 98,000.50
+        const price = parseFloat(response.data.price).toLocaleString('en-US', {minimumFractionDigits: 2});
+        
+        const msg = `Giá ${symbol} hiện tại là ${price} Đô la (USDT). (YÊU CẦU AI: Nếu giá cao thì hô to the moon, giá thấp thì kêu bắt đáy).`;
         
         cacheCoin.set(cacheKey, msg);
         res.send(msg);
     } catch (e) {
-        res.send(`Không tìm thấy đồng ${symbol} đâu.`);
+        res.send(`Không tìm thấy đồng ${symbol} đâu cả.`);
     }
 });
 
-// --- 3. GIÁ USDT (Chợ đen) ---
+// ============================================================
+// 3. GIÁ ĐÔ LA (USD & USDT)
+// ============================================================
 app.get('/usdt', async (req, res) => {
-    const cached = cacheCoin.get("usdt_vnd");
+    const cached = cacheBank.get("usdt_price");
     if (cached) return res.send(cached);
 
     try {
-        const rateRes = await axios.get('https://open.er-api.com/v6/latest/USD');
-        const rate = rateRes.data.rates.VND;
-        const usdtRate = (rate * 1.025).toFixed(0); // Cộng thêm 2.5% chênh lệch
-        const msg = `Giá Đô USDT thị trường khoảng ${parseInt(usdtRate).toLocaleString()} đồng.`;
+        const response = await axios.get('https://open.er-api.com/v6/latest/USD');
+        const rate = response.data.rates.VND; // Tỷ giá ngân hàng (ví dụ 25400)
         
-        cacheCoin.set("usdt_vnd", msg);
+        // Tính giá chợ đen (USDT) ~ cao hơn 3-4%
+        const blackMarketRate = rate * 1.035; 
+
+        // Format: 26,500
+        const bankStr = parseInt(rate).toLocaleString('vi-VN');
+        const blackStr = parseInt(blackMarketRate).toLocaleString('vi-VN');
+
+        const msg = `Tỷ giá Đô la hôm nay: Ngân hàng khoảng ${bankStr} đồng. ` +
+                    `Còn giá Đô chợ đen (USDT) khoảng ${blackStr} đồng. ` +
+                    `(YÊU CẦU AI: Khuyên user nên giữ Đô hay giữ Tiền Việt. Dùng giọng điệu chuyên gia tài chính).`;
+        
+        cacheBank.set("usdt_price", msg);
         res.send(msg);
     } catch (e) {
-        res.send("Không lấy được giá Đô rồi.");
+        res.send("Không lấy được tỷ giá Đô rồi.");
     }
 });
 
-// --- 4. TỶ GIÁ NGÂN HÀNG ---
+// ============================================================
+// 4. ĐỔI TIỀN (CURRENCY)
+// ============================================================
 app.get('/currency', async (req, res) => {
     const from = (req.query.from || "USD").toUpperCase();
     const to = (req.query.to || "VND").toUpperCase();
     
-    const cacheKey = `rate_${from}_${to}`;
-    const cached = cacheBank.get(cacheKey);
-    if (cached) return res.send(cached);
-
+    // Fix lỗi AI đọc sai: Chúng ta sẽ format rõ ràng
     try {
         const response = await axios.get(`https://open.er-api.com/v6/latest/${from}`);
         const rate = response.data.rates[to];
-        if (!rate) return res.send(`Không đổi được cặp này.`);
-        const msg = `1 ${from} đổi được khoảng ${parseInt(rate).toLocaleString()} ${to}.`;
         
-        cacheBank.set(cacheKey, msg);
+        if (!rate) return res.send(`Không đổi được từ ${from} sang ${to}.`);
+
+        // Format số nguyên cho tiền Việt (bỏ số lẻ thập phân)
+        const rateFormatted = parseInt(rate).toLocaleString('vi-VN');
+        
+        const msg = `1 ${from} đổi được khoảng ${rateFormatted} ${to}.`;
         res.send(msg);
     } catch (e) {
-        res.send("Lỗi lấy tỷ giá rồi.");
+        res.send("Lỗi tính tỷ giá rồi.");
     }
 });
 
