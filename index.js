@@ -6,10 +6,14 @@ const NodeCache = require('node-cache');
 const app = express();
 app.use(cors());
 
+// --- KHAI BÁO CACHE (LÚC NÃY BẠN THIẾU ĐOẠN NÀY NÈ) ---
+const cacheGold = new NodeCache({ stdTTL: 60 });   // Cache Vàng 60s
+const cacheCoin = new NodeCache({ stdTTL: 60 });   // Cache Coin 60s
+const cacheBank = new NodeCache({ stdTTL: 3600 }); // Cache Tỷ giá 1 tiếng
+
+app.get('/', (req, res) => res.send("Server Tài Chính (Binance Free) - Online"));
 
 // --- 1. GIÁ VÀNG (PHIÊN BẢN BINANCE - FREE VĨNH VIỄN) ---
-// Không cần GoldAPI Key nữa, vứt luôn cũng được!
-
 app.get('/gold', async (req, res) => {
     // Check cache 10 giây thôi, vì hàng Free mà!
     const cachedData = cacheGold.get("gold_binance");
